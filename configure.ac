@@ -62,6 +62,11 @@ else
   SYSTEMD=
 fi
 
+AC_ARG_ENABLE([kerberos],
+              AS_HELP_STRING([--enable-kerberos], [Use Kerberos]),
+              [with_kerberos=$enableval],
+              [with_kerberos=no])
+
 dnl ==============================================
 dnl Check that we meet the  dependencies
 dnl ==============================================
@@ -127,6 +132,31 @@ PKG_CHECK_MODULES(USER_ACCOUNTS_PANEL, $COMMON_MODULES
                   gnome-desktop-3.0
                   gdk-pixbuf-2.0 >= $GDKPIXBUF_REQUIRED_VERSION
                   $SYSTEMD)
+
+AC_PATH_PROG([KRB5_CONFIG], krb5-config, none, $PATH:/usr/kerberos/bin)
+
+if test "x$KRB5_CONFIG" != "xnone"; then
+    KRB5_LIBS="`${KRB5_CONFIG} --libs krb5`"
+    KRB5_CFLAGS="`${KRB5_CONFIG} --cflags krb5`"
+    have_kerberos=yes
+else
+    KRB5_LIBS=""
+    KRB5_CFLAGS=""
+    have_kerberos=no
+fi
+AC_SUBST(KRB5_CFLAGS)
+AC_SUBST(KRB5_LIBS)
+
+if test "$with_kerberos" = "yes" ; then
+  if test "$have_kerberos" = "no" ; then
+      AC_MSG_ERROR([kerberos support requested, but not available])
+  fi
+  AC_DEFINE(HAVE_KERBEROS, 1, [Define to 1 if kerberos is available])
+fi
+AM_CONDITIONAL(BUILD_KERBEROS, [test x$with_kerberos = xyes])
+
+USER_ACCOUNTS_PANEL_CFLAGS="$USER_ACCOUNTS_PANEL_CFLAGS $KRB5_CFLAGS"
+USER_ACCOUNTS_PANEL_LIBS="$USER_ACCOUNTS_PANEL_LIBS $KRB5_LIBS"
 PKG_CHECK_MODULES(WACOM_PANEL, $COMMON_MODULES
                   gnome-settings-daemon >= $GSD_REQUIRED_VERSION
                   xi >= 1.2 x11 libwacom >= $LIBWACOM_REQUIRED_VERSION
