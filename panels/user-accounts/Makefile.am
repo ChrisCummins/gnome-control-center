@@ -25,6 +25,8 @@ endif
 libuser_accounts_la_SOURCES =		\
 	um-account-type.h		\
 	um-account-type.c 		\
+	um-alarm.h			\
+	um-alarm.c			\
 	um-identity-manager.h		\
 	um-identity-manager.c		\
 	um-identity.h			\
