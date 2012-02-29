@@ -41,8 +41,14 @@
 
 #include "um-user.h"
 #include "um-user-manager.h"
+#include "um-identity-manager.h"
+
+#ifdef HAVE_KERBEROS
+#include "um-kerberos-identity-manager.h"
+#endif
 
 #include "cc-strength-bar.h"
+
 #include "um-editable-button.h"
 #include "um-editable-combo.h"
 
@@ -62,6 +68,15 @@ G_DEFINE_DYNAMIC_TYPE (UmUserPanel, um_user_panel, CC_TYPE_PANEL)
 #define UM_USER_PANEL_PRIVATE(o) \
   (G_TYPE_INSTANCE_GET_PRIVATE ((o), UM_TYPE_USER_PANEL, UmUserPanelPrivate))
 
+typedef struct {
+        UmUserPanelPrivate *d;
+        char *identifier;
+        UmIdentity *identity;
+        GtkWidget *box;
+        GtkWidget *label;
+        GtkWidget *button;
+} Realm;
+
 struct _UmUserPanelPrivate {
         UmUserManager *um;
         GtkBuilder *builder;
@@ -70,6 +85,8 @@ struct _UmUserPanelPrivate {
         GPermission *permission;
         GtkWidget *language_chooser;
 
+        GHashTable *accessible_realms;
+        UmIdentityManager *identity_manager;
         UmAccountDialog *account_dialog;
         UmPasswordDialog *password_dialog;
         UmPhotoDialog *photo_dialog;
@@ -548,6 +565,80 @@ autologin_changed (GObject            *object,
 }
 
 static void
+get_position_of_accessible_realms_label (UmUserPanelPrivate *d,
+                                         int                *left_position,
+                                         int                *top_position)
+{
+
+        GtkWidget *grid, *label;
+
+        grid = get_widget (d, "user-grid");
+        label = get_widget (d, "accessible-realms-label");
+        gtk_container_child_get (GTK_CONTAINER (grid),
+                                 label,
+                                 "left-attach", left_position,
+                                 "top-attach", top_position,
+                                 NULL);
+}
+
+static void
+get_position_of_next_realm_box (UmUserPanelPrivate *d,
+                                 int                *left_position,
+                                 int                *top_position)
+{
+        GtkWidget *grid;
+
+        GHashTableIter iter;
+        gpointer key, value;
+
+        grid = get_widget (d, "user-grid");
+        get_position_of_accessible_realms_label (d, left_position, top_position);
+        *left_position += 1;
+
+        g_hash_table_iter_init (&iter, d->accessible_realms);
+        while (g_hash_table_iter_next (&iter, &key, &value)) {
+                int other_realm_top_position;
+                Realm *realm = value;
+
+                gtk_container_child_get (GTK_CONTAINER (grid),
+                                         realm->box,
+                                         "top-attach", &other_realm_top_position,
+                                         NULL);
+
+                *top_position = MAX (*top_position, other_realm_top_position + 1);
+        }
+}
+
+static void
+update_accessible_realms_visiblity (UmUserPanelPrivate *d)
+{
+        GtkWidget *label;
+        GHashTableIter iter;
+        gpointer key, value;
+        UmUser    *user;
+        uid_t      uid;
+        gboolean should_show;
+
+        label = get_widget (d, "accessible-realms-label");
+        user = get_selected_user (d);
+        uid = um_user_get_uid (user);
+
+        if (g_hash_table_size (d->accessible_realms) > 0 && uid == geteuid ()) {
+                should_show = TRUE;
+        } else {
+                should_show = FALSE;
+        }
+
+        gtk_widget_set_visible (label, should_show);
+        g_hash_table_iter_init (&iter, d->accessible_realms);
+        while (g_hash_table_iter_next (&iter, &key, &value)) {
+                Realm *realm = value;
+
+                gtk_widget_set_visible (realm->box, should_show);
+        }
+}
+
+static void
 show_user (UmUser *user, UmUserPanelPrivate *d)
 {
         GtkWidget *image;
@@ -624,6 +715,8 @@ show_user (UmUser *user, UmUserPanelPrivate *d)
                         gtk_widget_hide (widget);
                 }
         }
+
+        update_accessible_realms_visiblity (d);
 }
 
 static void on_permission_changed (GPermission *permission, GParamSpec *pspec, gpointer data);
@@ -1334,6 +1427,305 @@ setup_main_window (UmUserPanelPrivate *d)
 }
 
 static void
+remove_accessible_realm_for_identity (UmUserPanelPrivate *d,
+                                      UmIdentity         *identity)
+{
+        GtkWidget *grid;
+        Realm *realm;
+        GHashTableIter iter;
+        gpointer key, value;
+        int top_position;
+
+        realm = g_hash_table_lookup (d->accessible_realms,
+                                     (gpointer)
+                                     um_identity_get_identifier (identity));
+
+        if (realm == NULL) {
+                return;
+        }
+
+        grid = get_widget (d, "user-grid");
+
+        gtk_container_child_get (GTK_CONTAINER (grid),
+                                 realm->box,
+                                 "top-attach", &top_position,
+                                 NULL);
+
+        g_hash_table_remove (d->accessible_realms, realm->identifier);
+
+        g_hash_table_iter_init (&iter, d->accessible_realms);
+        while (g_hash_table_iter_next (&iter, &key, &value)) {
+                int other_realm_top_position;
+
+                realm = value;
+
+                gtk_container_child_get (GTK_CONTAINER (grid),
+                                         realm->box,
+                                         "top-attach", &other_realm_top_position,
+                                         NULL);
+
+                if (other_realm_top_position > top_position) {
+                        other_realm_top_position--;
+                        gtk_container_child_set (GTK_CONTAINER (grid),
+                                                 realm->box,
+                                                 "top-attach", other_realm_top_position,
+                                                 NULL);
+                }
+        }
+        update_accessible_realms_visiblity (d);
+}
+
+static void
+rename_accessible_realm_for_identity (UmUserPanelPrivate *d,
+                                      UmIdentity         *identity)
+{
+        Realm *realm;
+        char *name;
+
+        realm = g_hash_table_lookup (d->accessible_realms,
+                                     (gpointer)
+                                     um_identity_get_identifier (identity));
+
+        if (realm == NULL) {
+                return;
+        }
+
+        name = um_identity_manager_name_identity (d->identity_manager,
+                                                  identity);
+        gtk_label_set_text (GTK_LABEL (realm->label), name);
+        g_free (name);
+}
+
+static void
+on_signed_out (UmIdentityManager *manager,
+               GAsyncResult      *result,
+               gpointer           user_data)
+{
+        UmIdentity *identity = UM_IDENTITY (user_data);
+
+        um_identity_manager_sign_identity_out_finish (manager,
+                                                      result,
+                                                      NULL);
+        g_object_unref (identity);
+}
+
+static void
+on_sign_out_clicked (GtkButton          *button,
+                     Realm              *realm)
+{
+        UmUserPanelPrivate *d = realm->d;
+
+        um_identity_manager_sign_identity_out (d->identity_manager,
+                                               realm->identity,
+                                               NULL,
+                                               (GAsyncReadyCallback)
+                                               on_signed_out,
+                                               g_object_ref (realm->identity));
+}
+
+static Realm *
+realm_new (UmUserPanelPrivate *d,
+           UmIdentity         *identity)
+{
+        Realm *realm;
+        char *name;
+
+        realm = g_slice_new (Realm);
+        realm->d = d;
+        realm->identifier = g_strdup (um_identity_get_identifier (identity));
+        realm->identity = identity;
+        realm->box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+
+        name = um_identity_manager_name_identity (d->identity_manager,
+                                                  identity);
+        realm->label = gtk_label_new (name);
+        g_free (name);
+
+        gtk_container_add (GTK_CONTAINER (realm->box), realm->label);
+
+        realm->button = gtk_button_new_with_label (_("Sign Out"));
+        gtk_widget_set_halign (GTK_WIDGET (realm->button),
+                               GTK_ALIGN_END);
+        gtk_widget_set_hexpand (GTK_WIDGET (realm->button),
+                                TRUE);
+
+        g_signal_connect (G_OBJECT (realm->button),
+                          "clicked",
+                          G_CALLBACK (on_sign_out_clicked),
+                          realm);
+        gtk_container_add (GTK_CONTAINER (realm->box), realm->button);
+        gtk_widget_show_all (realm->box);
+
+        return realm;
+}
+
+static void
+realm_free (Realm *realm)
+{
+        gtk_widget_destroy (realm->box);
+        g_free (realm->identifier);
+        g_slice_free (Realm, realm);
+}
+
+static void
+add_accessible_realm_for_identity (UmUserPanelPrivate *d,
+                                   UmIdentity         *identity)
+{
+        Realm *realm;
+        GtkWidget *grid;
+        int left_position, top_position;
+
+        remove_accessible_realm_for_identity (d, identity);
+
+        realm = realm_new (d, identity);
+
+        grid = get_widget (d, "user-grid");
+
+        get_position_of_next_realm_box (d, &left_position, &top_position);
+        g_hash_table_replace (d->accessible_realms,
+                              realm->identifier,
+                              realm);
+
+        gtk_grid_attach (GTK_GRID (grid),
+                         realm->box,
+                         left_position,
+                         top_position,
+                         1,
+                         1);
+        update_accessible_realms_visiblity (d);
+}
+
+static void
+on_identity_added (UmIdentityManager *manager,
+                   UmIdentity        *identity,
+                   gpointer           user_data)
+{
+        UmUserPanelPrivate *d = user_data;
+
+        add_accessible_realm_for_identity (d, identity);
+}
+
+static void
+on_identity_renewed (UmIdentityManager *manager,
+                     UmIdentity        *identity,
+                     gpointer           user_data)
+{
+        UmUserPanelPrivate *d = user_data;
+
+        add_accessible_realm_for_identity (d, identity);
+}
+
+static void
+on_identity_removed (UmIdentityManager *manager,
+                     UmIdentity        *identity,
+                     gpointer           user_data)
+{
+        UmUserPanelPrivate *d = user_data;
+
+        remove_accessible_realm_for_identity (d, identity);
+}
+
+static void
+on_identity_expired (UmIdentityManager *manager,
+                     UmIdentity        *identity,
+                     gpointer           user_data)
+{
+        UmUserPanelPrivate *d = user_data;
+
+        remove_accessible_realm_for_identity (d, identity);
+}
+
+static void
+on_identity_renamed (UmIdentityManager *manager,
+                     UmIdentity        *identity,
+                     gpointer           user_data)
+{
+        UmUserPanelPrivate *d = user_data;
+
+        rename_accessible_realm_for_identity (d, identity);
+}
+
+static void
+on_identities_listed (UmIdentityManager *manager,
+                      GAsyncResult      *result,
+                      gpointer           user_data)
+{
+        UmUserPanelPrivate *d = user_data;
+        GError *error = NULL;
+        GList *identities, *node;
+
+        g_signal_connect (manager,
+                          "identity-added",
+                          G_CALLBACK (on_identity_added),
+                          d);
+
+        g_signal_connect (manager,
+                          "identity-removed",
+                          G_CALLBACK (on_identity_removed),
+                          d);
+
+        g_signal_connect (manager,
+                          "identity-expired",
+                          G_CALLBACK (on_identity_expired),
+                          d);
+
+        g_signal_connect (manager,
+                          "identity-renewed",
+                          G_CALLBACK (on_identity_renewed),
+                          d);
+        g_signal_connect (manager,
+                          "identity-renamed",
+                          G_CALLBACK (on_identity_renamed),
+                          d);
+
+        identities = um_identity_manager_list_identities_finish (manager,
+                                                                 result,
+                                                                 &error);
+
+        if (identities == NULL) {
+                if (error != NULL) {
+                        g_warning ("UmUserPanel: Could not list identities: %s",
+                                   error->message);
+                        g_error_free (error);
+                }
+
+                gtk_widget_hide (get_widget (d, "accessible-realms-vbox"));
+                return;
+        }
+
+        node = identities;
+        while (node != NULL) {
+                UmIdentity *identity = UM_IDENTITY (node->data);
+
+                if (um_identity_is_signed_in (identity)) {
+                        add_accessible_realm_for_identity (d, identity);
+                }
+
+                node = node->next;
+        }
+}
+
+static void
+setup_realms (UmUserPanelPrivate *d)
+{
+
+        d->accessible_realms = g_hash_table_new_full (g_str_hash,
+                                                      g_str_equal,
+                                                      NULL,
+                                                      (GDestroyNotify)
+                                                      realm_free);
+
+#ifdef HAVE_KERBEROS
+        d->identity_manager = um_kerberos_identity_manager_new ();
+        um_identity_manager_list_identities (d->identity_manager,
+                                             NULL,
+                                             (GAsyncReadyCallback)
+                                             on_identities_listed,
+                                             d);
+#endif
+}
+
+static void
 um_user_panel_init (UmUserPanel *self)
 {
         UmUserPanelPrivate *d;
@@ -1366,7 +1758,7 @@ um_user_panel_init (UmUserPanel *self)
                 g_error_free (error);
                 return;
         }
-
+        setup_realms (d);
         setup_main_window (d);
         d->account_dialog = um_account_dialog_new ();
         d->password_dialog = um_password_dialog_new ();
@@ -1414,6 +1806,12 @@ um_user_panel_dispose (GObject *object)
                 g_object_unref (priv->permission);
                 priv->permission = NULL;
         }
+
+        if (priv->accessible_realms) {
+                g_hash_table_unref (priv->accessible_realms);
+                priv->accessible_realms = NULL;
+        }
+
         G_OBJECT_CLASS (um_user_panel_parent_class)->dispose (object);
 }
 
