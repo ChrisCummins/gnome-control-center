@@ -225,6 +225,23 @@ PKG_CHECK_MODULES(ISOCODES, iso-codes)
 AC_DEFINE_UNQUOTED([ISO_CODES_PREFIX],["`$PKG_CONFIG --variable=prefix iso-codes`"],[ISO codes prefix])
 ISO_CODES=iso-codes
 
+# Kerberos kerberos support
+AC_PATH_PROG(KRB5_CONFIG, krb5-config)
+AC_MSG_CHECKING(for working krb5-config)
+if test -x "$KRB5_CONFIG"; then
+	KRB5_CFLAGS="`$KRB5_CONFIG --cflags`"
+	KRB5_LIBS="`$KRB5_CONFIG --libs`"
+	AC_MSG_RESULT(yes)
+elif test x$KRB5_PASSED_LIBS = x; then
+	AC_MSG_ERROR(no. Please install MIT kerberos devel package)
+fi
+
+AC_SUBST(KRB5_CFLAGS)
+AC_SUBST(KRB5_LIBS)
+
+USER_ACCOUNTS_PANEL_CFLAGS="$USER_ACCOUNTS_PANEL_CFLAGS $KRB5_CFLAGS"
+USER_ACCOUNTS_PANEL_LIBS="$USER_ACCOUNTS_PANEL_LIBS $KRB5_LIBS"
+
 dnl ==============================================
 dnl End: Check that we meet the  dependencies
 dnl ==============================================
