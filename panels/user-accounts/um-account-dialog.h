@@ -33,14 +33,14 @@ G_BEGIN_DECLS
 
 typedef struct _UmAccountDialog UmAccountDialog;
 
-typedef void (*UserCreatedCallback) (UmUser *user, gpointer data);
-
 GType            um_account_dialog_get_type (void) G_GNUC_CONST;
 UmAccountDialog *um_account_dialog_new      (void);
-void             um_account_dialog_show     (UmAccountDialog     *self,
+void             um_account_dialog_perform  (UmAccountDialog     *self,
                                              GtkWindow           *parent,
-                                             UserCreatedCallback  user_created,
-                                             gpointer             data);
+                                             GAsyncReadyCallback  callback,
+                                             gpointer             user_data);
+UmUser *         um_account_dialog_finish   (UmAccountDialog     *self,
+                                             GAsyncResult        *result);
 
 G_END_DECLS
 
