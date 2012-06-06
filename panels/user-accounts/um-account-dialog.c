@@ -39,6 +39,7 @@ struct _UmAccountDialog {
         GtkDialog parent;
         GtkWidget *widgets;
         GSimpleAsyncResult *async;
+        GCancellable *cancellable;
 
         GtkWidget *username_combo;
         GtkWidget *name_entry;
@@ -148,6 +149,7 @@ accept_account_dialog (UmAccountDialog *self)
                                      username,
                                      name,
                                      account_type,
+                                     self->cancellable,
                                      (GAsyncReadyCallback)create_user_done,
                                      self,
                                      NULL);
@@ -271,6 +273,7 @@ um_account_dialog_response (GtkDialog *dialog,
                 break;
         case GTK_RESPONSE_CANCEL:
         case GTK_RESPONSE_DELETE_EVENT:
+                g_cancellable_cancel (self->cancellable);
                 complete_dialog (self, NULL);
                 break;
         default:
@@ -280,9 +283,35 @@ um_account_dialog_response (GtkDialog *dialog,
 }
 
 static void
+um_account_dialog_dispose (GObject *obj)
+{
+        UmAccountDialog *self = UM_ACCOUNT_DIALOG (obj);
+
+        if (self->cancellable)
+                g_cancellable_cancel (self->cancellable);
+
+        G_OBJECT_CLASS (um_account_dialog_parent_class)->dispose (obj);
+}
+
+static void
+um_account_dialog_finalize (GObject *obj)
+{
+        UmAccountDialog *self = UM_ACCOUNT_DIALOG (obj);
+
+        if (self->cancellable)
+                g_object_unref (self->cancellable);
+
+        G_OBJECT_CLASS (um_account_dialog_parent_class)->finalize (obj);
+}
+
+static void
 um_account_dialog_class_init (UmAccountDialogClass *klass)
 {
+        GObjectClass *object_class = G_OBJECT_CLASS (klass);
         GtkDialogClass *dialog_class = GTK_DIALOG_CLASS (klass);
+
+        object_class->dispose = um_account_dialog_dispose;
+        object_class->finalize = um_account_dialog_finalize;
 
         dialog_class->response = um_account_dialog_response;
 }
@@ -308,6 +337,10 @@ um_account_dialog_perform (UmAccountDialog     *self,
 
         self->async = g_simple_async_result_new (G_OBJECT (self), callback, user_data,
                                                  um_account_dialog_perform);
+
+        if (self->cancellable)
+                g_object_unref (self->cancellable);
+        self->cancellable = g_cancellable_new ();
 
         gtk_entry_set_text (GTK_ENTRY (self->name_entry), "");
         gtk_entry_set_text (GTK_ENTRY (gtk_bin_get_child (GTK_BIN (self->username_combo))), "");

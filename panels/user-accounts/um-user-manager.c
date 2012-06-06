@@ -515,6 +515,7 @@ um_user_manager_create_user (UmUserManager       *manager,
                              const char          *user_name,
                              const char          *real_name,
                              gint                 account_type,
+                             GCancellable        *cancellable,
                              GAsyncReadyCallback  done,
                              gpointer             done_data,
                              GDestroyNotify       destroy)
@@ -533,7 +534,7 @@ um_user_manager_create_user (UmUserManager       *manager,
                            g_variant_new ("(ssi)", user_name, real_name, account_type),
                            G_DBUS_CALL_FLAGS_NONE,
                            -1,
-                           NULL,
+                           cancellable,
                            create_user_done,
                            data);
 }
