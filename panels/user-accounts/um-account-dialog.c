@@ -37,6 +37,12 @@ static void   dialog_validate     (UmAccountDialog *self);
 #define UM_ACCOUNT_DIALOG_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), UM_TYPE_ACCOUNT_DIALOG, \
                                                                       UmAccountDialogClass))
 
+typedef enum {
+        UM_LOCAL,
+        UM_ENTERPRISE,
+        NUM_MODES
+} UmAccountMode;
+
 struct _UmAccountDialog {
         GtkDialog parent;
         GtkWidget *widgets;
@@ -44,10 +50,19 @@ struct _UmAccountDialog {
         GCancellable *cancellable;
         GtkSpinner *spinner;
 
+        /* Bar switcher stuff */
+        UmAccountMode mode;
+        GtkWidget *switcher;
+        gboolean switcher_updating;
+        GtkWidget *switcher_buttons[NUM_MODES];
+        GtkWidget *switcher_areas[NUM_MODES];
+
         /* Local widgets */
         GtkWidget *local_username;
         GtkWidget *local_name;
         GtkWidget *local_account_type;
+
+        /* Enterprise widgets */
 };
 
 typedef struct {
@@ -250,9 +265,125 @@ dialog_validate (UmAccountDialog *self)
 {
         gboolean valid = FALSE;
 
-        valid = local_validate (self);
+        switch (self->mode) {
+        case UM_LOCAL:
+                valid = local_validate (self);
+                break;
+        case UM_ENTERPRISE:
+                /* TODO: Implement */
+                valid = FALSE;
+                break;
+        default:
+                valid = FALSE;
+                break;
+        }
 
         gtk_dialog_set_response_sensitive (GTK_DIALOG (self), GTK_RESPONSE_OK, valid);
+}
+
+static void
+label_set_bold (GtkLabel *label,
+                gboolean  bold)
+{
+        PangoAttrList *attrs;
+        PangoAttribute *attr;
+
+        attrs = pango_attr_list_new ();
+        attr = pango_attr_weight_new (bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL);
+        pango_attr_list_insert (attrs, attr);
+        gtk_label_set_attributes (label, attrs);
+        pango_attr_list_unref (attrs);
+}
+
+
+static void
+switcher_switch (UmAccountDialog *self,
+                 UmAccountMode mode)
+{
+        GtkWidget *button;
+        gint visible_count = 0;
+        gboolean active;
+        gint i;
+
+        g_assert (!self->switcher_updating);
+        self->switcher_updating = TRUE;
+
+        for (i = 0; i < NUM_MODES; i++) {
+                button = self->switcher_buttons[i];
+                active = (i == (gint)mode);
+
+                /* The toggle state */
+                if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (button)) != active)
+                        gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (button), active);
+
+                /* Make toggled buttons bold */
+                label_set_bold (GTK_LABEL (gtk_bin_get_child (GTK_BIN (button))), active);
+
+                /* Show the correct area */
+                gtk_widget_set_visible (GTK_WIDGET (self->switcher_areas[i]), active);
+
+                if (gtk_widget_get_visible (button))
+                        visible_count++;
+        }
+
+        /* Show switcher if more than one visible */
+        gtk_widget_set_visible (GTK_WIDGET (self->switcher), visible_count > 1);
+
+        self->mode = mode;
+        self->switcher_updating = FALSE;
+        dialog_validate (self);
+}
+
+static void
+switcher_toggle (UmAccountDialog *self,
+                 GtkToggleButton *toggle,
+                 UmAccountMode mode)
+{
+        if (self->switcher_updating)
+                return;
+
+        /* Undo the toggle if already pressed */
+        if (!gtk_toggle_button_get_active (toggle))
+                gtk_toggle_button_set_active (toggle, TRUE);
+
+        /* Otherwise switch to new area */
+        else
+                switcher_switch (self, mode);
+}
+
+static void
+on_local_toggle (GtkToggleButton *toggle,
+                 gpointer user_data)
+{
+        switcher_toggle (UM_ACCOUNT_DIALOG (user_data), toggle, UM_LOCAL);
+}
+
+static void
+on_enterprise_toggle (GtkToggleButton *toggle,
+                      gpointer user_data)
+{
+        switcher_toggle (UM_ACCOUNT_DIALOG (user_data), toggle, UM_ENTERPRISE);
+}
+
+static void
+switcher_init (UmAccountDialog *self,
+               GtkBuilder *builder)
+{
+        GtkWidget *widget;
+
+        self->switcher = (GtkWidget *) gtk_builder_get_object (builder, "account-switcher");
+
+        widget = (GtkWidget *) gtk_builder_get_object (builder, "local-area");
+        self->switcher_areas[UM_LOCAL] = widget;
+        widget = (GtkWidget *) gtk_builder_get_object (builder, "enterprise-area");
+        self->switcher_areas[UM_ENTERPRISE] = widget;
+
+        widget = (GtkWidget *) gtk_builder_get_object (builder, "local-button");
+        g_signal_connect (widget, "toggled", G_CALLBACK (on_local_toggle), self);
+        self->switcher_buttons[UM_LOCAL] = widget;
+        widget = (GtkWidget *) gtk_builder_get_object (builder, "enterprise-button");
+        g_signal_connect (widget, "toggled", G_CALLBACK (on_enterprise_toggle), self);
+        self->switcher_buttons[UM_ENTERPRISE] = widget;
 }
 
 static void
@@ -312,6 +443,7 @@ um_account_dialog_init (UmAccountDialog *self)
         self->widgets = widget;
 
         local_area_init (self, builder);
+        switcher_init (self, builder);
 
         g_object_unref (builder);
 }
@@ -324,7 +456,17 @@ um_account_dialog_response (GtkDialog *dialog,
 
         switch (response_id) {
         case GTK_RESPONSE_OK:
-                local_create_user (self);
+                switch (self->mode) {
+                case UM_LOCAL:
+                        local_create_user (self);
+                        break;
+                case UM_ENTERPRISE:
+                        /* TODO: */
+                        g_assert_not_reached ();
+                        break;
+                default:
+                        g_assert_not_reached ();
+                }
                 break;
         case GTK_RESPONSE_CANCEL:
         case GTK_RESPONSE_DELETE_EVENT:
@@ -396,6 +538,7 @@ um_account_dialog_perform (UmAccountDialog     *self,
         self->cancellable = g_cancellable_new ();
 
         local_prepare (self);
+        switcher_switch (self, UM_LOCAL);
         dialog_validate (self);
 
         gtk_window_set_modal (GTK_WINDOW (self), parent != NULL);
