@@ -181,11 +181,24 @@ populate_model_from_node (GvcSoundThemeChooser *chooser,
         }
 
         if (filename != NULL && name != NULL) {
+                xmlChar *display_name;
+
+                g_message("default: %s, filename: %s", DEFAULT_ALERT_ID, filename);
+
+                if (g_strcmp0(name, DEFAULT_ALERT_ID) == 0) {
+                        /* FIXME: free */
+                        display_name = g_strconcat (name, " (", _("Default"), ")");
+                        g_message("^^^ MATCH! ^^^");
+                } else {
+                        display_name = name;
+                }
+
+                /* FIXME: append 'DEFAULT' to default */
                 gtk_list_store_insert_with_values (GTK_LIST_STORE (model),
                                                    NULL,
                                                    G_MAXINT,
                                                    ALERT_IDENTIFIER_COL, filename,
-                                                   ALERT_DISPLAY_COL, name,
+                                                   ALERT_DISPLAY_COL, display_name,
                                                    ALERT_SOUND_TYPE_COL, _("Built-in"),
                                                    -1);
         }
